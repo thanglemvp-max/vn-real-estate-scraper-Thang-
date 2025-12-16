@@ -1,64 +1,92 @@
 from selenium import webdriver
 from selenium.webdriver.firefox.service import Service
-from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
+import re
 
-def crawl_data(url_real_estate):
-    gecko_path = "geckodriver.exe"
-    
-    # Cấu hình Firefox
+def parse_detail_page(html_content, url):
+    ser = Service(executable_path="geckodriver.exe")
+
+    # Firefox Configuration
     options = webdriver.firefox.options.Options()
     options.binary_location = "C:/Program Files/Mozilla Firefox/firefox.exe"
     options.headless = False
 
     driver = webdriver.Firefox(
-        service=Service(gecko_path),
-        options=chrome_options
+        service=ser,
+        options=options
     )
-    url = url_real_estate
     driver.get(url)
 
-    # Đợi JS render xong
-    time.sleep(5)
+    # JS render
+    wait = WebDriverWait(driver, 15)
+    wait.until(EC.presence_of_element_located((By.TAG_NAME, "h1")))
 
-    # Lấy HTML sau khi JS load
+    # Parse BeautifulSoup
     html = driver.page_source
-
-    # Parse bằng BeautifulSoup
     soup = BeautifulSoup(html, "lxml")
 
-    # Trích xuất thông tin
+    # Extract information
+    # POST ID
+    post_id = re.search(r"pr\d+", url)
+    post_id = post_id.group() if post_id else "NaN"
 
-    # post_id
-
-    # Tiêu đề
+    # TITLE
     title = soup.find("h1")
-    print("Tiêu đề:", title.get_text(strip=True) if title else "N/A")
+    title = title.get_text(strip=True) if title else "NaN"
 
-    # Địa chỉ
+    # ADDRESS
     address = soup.select_one("span.re__pr-short-description")
-    print("Địa chỉ:", address.get_text(strip=True) if address else "N/A")
+    address = address.get_text(strip=True) if address else "NaN"
 
-    # Giá
-    price = soup.select_one(".re__pr-specs-content-item-value")
-    print("Giá:", price.get_text(strip=True) if price else "N/A")
-
-    # Diện tích
-    specs = soup.select(".re__pr-specs-content-item-value")
-    area = specs[1].get_text(strip=True) if len(specs) > 1 else "N/A"
-    print("Diện tích:", area)
-
-    # Phòng ngủ
-    specs = soup.select(".re__pr-specs-content-item-value")
-    bedroom = specs[2].get_text(strip=True) if len(specs) > 1 else "N/A"
-    print("Phòng ngủ:", bedroom)
-
-    # Mô tả
+    # DESCRIPTION
     description = soup.select_one(".re__pr-description")
-    print("Mô tả:", description.get_text(strip=True) if description else "N/A")
+    description = description.get_text(strip=True) if description else "N/A"
+
+    # OTHER FEATURES
+    specs = {}
+    for item in soup.select(".re__pr-specs-content-item"):
+        label = item.select_one(".re__pr-specs-content-item-title")
+        value = item.select_one(".re__pr-specs-content-item-value")
+        if label and value:
+            specs[label.get_text(strip=True)] = value.get_text(strip=True)
+
+    price = specs.get("Mức giá", "NaN")
+    area = specs.get("Diện tích", "NaN")
+    bedroom = specs.get("Số phòng ngủ", "NaN")
+    bathroom = specs.get("Số phòng tắm, vệ sinh", "NaN")
+    num_floor = specs.get("Số tầng", "NaN")
+    house_orientation = specs.get("Hướng nhà, vệ sinh", "NaN")
+    balcony_direction = specs.get("Hướng ban công, vệ sinh", "NaN")
+    front = specs.get("Mặt tiền, vệ sinh", "NaN")
+    entrance = specs.get("Đường vào", "NaN")
+    legal = specs.get("Pháp lý, vệ sinh", "NaN")
+    furniture = specs.get("Nội thất", "NaN")
 
     driver.quit()
+    data = {
+        "post_id": post_id,
+        "title": title,
+        "address": address,
+        "price": price,
+        "area": area,
+        "bedroom": bedroom,
+        "bathroom": bathroom,
+        "num_floor": num_floor,
+        "house_orientation": house_orientation,
+        "balcony_direction": balcony_direction,
+        "front": front,
+        "entrance": entrance,
+        "legal": legal,
+        "furniture": furniture,
+        "description": description
+    }
+
+    return data
 
 if __name__ == '__main__':
-    crawl_data('https://batdongsan.com.vn/ban-can-ho-chung-cu-xa-long-hung-prj-vinhomes-ocean-park-2/dau-tu-tai-vin-2-gia-tu-59tr-m2-full-vat-pr44804495')
+    bds = parse_detail_page(html_content="", url='https://batdongsan.com.vn/ban-can-ho-chung-cu-xa-long-hung-prj-vinhomes-ocean-park-2/dau-tu-tai-vin-2-gia-tu-59tr-m2-full-vat-pr44804495')
+    print(bds)
