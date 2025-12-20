@@ -3,224 +3,356 @@ import re
 import unidecode
 from urllib.parse import urlparse
 from datetime import datetime
+from typing import Dict, List, Optional, Any
+from utils.logger import get_logger
 
-def extract_coords_from_js_config(html_content):
+logger = get_logger("parser")
+
+# Property type mapping for sale listings
+SALE_PROPERTY_TYPES = {
+    "ban-can-ho-chung-cu": "Apartment",
+    "ban-can-ho-chung-cu-mini": "Mini Apartment",
+    "ban-nha-rieng": "Private House",
+    "ban-nha-biet-thu-lien-ke": "Villa/Townhouse",
+    "ban-nha-mat-pho": "Storefront House",
+    "ban-shophouse-nha-pho-thuong-mai": "Shophouse",
+    "ban-dat-nen-du-an": "Project Land",
+    "ban-dat": "Land Plot",
+    "ban-trang-trai-khu-nghi-duong": "Farm/Resort",
+    "ban-condotel": "Condotel",
+    "ban-kho-nha-xuong": "Warehouse/Factory"
+}
+
+# Property type mapping for rental listings
+RENT_PROPERTY_TYPES = {
+    "cho-thue-can-ho-chung-cu": "Apartment",
+    "cho-thue-can-ho-chung-cu-mini": "Mini Apartment",
+    "cho-thue-nha-rieng": "Private House",
+    "cho-thue-nha-biet-thu-lien-ke": "Villa/Townhouse",
+    "cho-thue-nha-mat-pho": "Storefront House",
+    "cho-thue-shophouse-nha-pho-thuong-mai": "Shophouse",
+    "cho-thue-dat": "Land Plot",
+    "cho-thue-trang-trai-khu-nghi-duong": "Farm/Resort",
+    "cho-thue-condotel": "Condotel",
+    "cho-thue-kho-nha-xuong": "Warehouse/Factory",
+    "cho-thue-van-phong": "Office Space",
+    "cho-thue-cua-hang-ki-ot": "Shop/Kiosk",
+    "cho-thue-phong-tro": "Room"
+}
+
+# Combined mapping for unified lookup
+ALL_PROPERTY_TYPES = {**SALE_PROPERTY_TYPES, **RENT_PROPERTY_TYPES}
+
+# Transaction type detection patterns
+TRANSACTION_TYPE_PATTERNS = {
+    "sale": r'^ban-',
+    "rent": r'^cho-thue-'
+}
+
+SPEC_KEY_MAPPING = {
+    "khoang_gia": "price",
+    "dien_tich": "area",
+    "so_phong_ngu": "bedroom",
+    "so_phong_tam,_ve_sinh": "bathroom",
+    "so_tang": "num_floor",
+    "huong_nha": "orientation",
+    "huong_ban_cong": "balcony_direction",
+    "mat_tien": "front_width",
+    "duong_vao": "road_width",
+    "phap_ly": "legal",
+    "noi_that": "furniture",
+    "thoi_gian_du_kien_vao_o": "exdate",
+    "muc_gia_dien": "electricity",
+    "muc_gia_nuoc": "water",
+    "muc_gia_internet": "internet",
+    "tien_ich": "utilities"
+}
+
+# Pre-compiled regex patterns
+POST_ID_PATTERN = re.compile(r"pr(\d+)$")
+COORD_PATTERN_TEMPLATE = r'["\']?{key}["\']?\s*:\s*(-?[\d\.]+)'
+
+PREFIX = "Thông tin mô tả"
+
+
+def normalize_key(key: str) -> str:
+    """
+    Convert to lowercase, remove accents, replace spaces with underscores
+    """
+    key = unidecode.unidecode(key).lower().replace(" ", "_")
+    return key
+
+
+def get_post_id(url: str) -> Optional[str]:
+    """
+    Extract the unique post identifier from listing URL.
+    """
+    match = POST_ID_PATTERN.search(url)
+    return match.group(1) if match else None
+
+
+def set_property_category(url: str) -> str:
+    """
+    Determine property category from URL path segment
+    """
+    path = urlparse(url).path.strip('/').lower()
+
+    for path_segment, category in ALL_PROPERTY_TYPES.items():
+        if path.startswith(path_segment):
+            # Verify path segment boundary
+            if len(path) == len(path_segment) or path[len(path_segment)] == '-':
+                return category
+    return "Unknown"
+
+
+def set_transaction_type(url: str) -> str:
+    """
+    Detect the transaction type (sale or rent) from URL pattern.
+    """
+    path = urlparse(url).path.strip('/').lower()
+
+    for transaction_type, pattern in TRANSACTION_TYPE_PATTERNS.items():
+        if re.match(pattern, path):
+            return transaction_type
+
+    return "Unknown"
+
+
+def clean_dict(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Recursively remove None values and empty collections from dictionary.
+    """
+    cleaned = {}
+
+    for key, value in data.items():
+        if value is None:
+            continue
+        elif isinstance(value, dict):
+            cleaned_nested = clean_dict(value)
+            if cleaned_nested:  # Only include non-empty nested dicts
+                cleaned[key] = cleaned_nested
+        elif isinstance(value, list) and not value:
+            continue
+        else:
+            cleaned[key] = value
+
+    return cleaned
+
+
+def get_coordinate(html_content: str) -> Dict[str, float]:
     """
     Uses flexible Regex to extract key numerical values coordinates
     from a hidden JavaScript configuration block in the static HTML
     """
-    js_data = {}
+    geo = {}
 
-    def search_key(key, content):
+    for key in ['latitude', 'longitude']:
         pattern = rf'["\']?{re.escape(key)}["\']?\s*:\s*(-?[\d\.]+)'
-        match = re.search(pattern, content)
+        match = re.search(pattern, html_content)
         if match:
-            return match.group(1).replace(' ', '')
-        return None
+            try:
+                geo[key] = float(match.group(1).replace(' ', ''))
+            except ValueError:
+                pass
 
-    lat_str = search_key('latitude', html_content)
-    if lat_str:
-        try:
-            js_data['latitude'] = float(lat_str)
-        except ValueError:
-            pass
+    return geo
 
-    lon_str = search_key('longitude', html_content)
-    if lon_str:
-        try:
-            js_data['longitude'] = float(lon_str)
-        except ValueError:
-            pass
 
-    return js_data
+def get_text(soup: BeautifulSoup, selector: str, default: Optional[str] = None) -> Optional[str]:
+    """
+    Safely extract text content from HTML element by CSS selector.
+    """
+    tag = soup.select_one(selector)
+    return tag.get_text(strip=True) if tag else default
 
-def classify_property(url):
-    """ Classify the property type based on the URL path segment """
-    mapping = {
-        "ban-can-ho-chung-cu": "Apartment",
-        "ban-can-ho-chung-cu-mini": "Apartment",
-        "ban-nha-rieng": "House",
-        "ban-nha-biet-thu-lien-ke": "House",
-        "ban-nha-mat-pho": "House",
-        "ban-shophouse-nha-pho-thuong-mai": "House",
-        "ban-dat-nen-du-an": "Land",
-        "ban-dat": "Land",
-        "ban-trang-trai-khu-nghi-duong": "Resort/Investment",
-        "ban-condotel": "Resort/Investment",
-        "ban-kho-nha-xuong": "Warehouse/Factory"
-    }
 
-    path = urlparse(url).path
-    path = path.strip('/').lower()
-    for detailed_type, main_group in mapping.items():
-        if path.startswith(detailed_type):
-            if len(path) == len(detailed_type) or path[len(detailed_type)] == '-':
-                return main_group
-    return "Unknown"
-
-def normalize_data_key(key):
-    """ Convert to lowercase, remove accents, replace spaces with underscores """
-    key = unidecode.unidecode(key)
-    key = key.lower().replace(" ", "_")
-    return key
-
-def extract_post_id(url):
-    """ Extract the numerical post ID from the URL (pr____) """
-    match = re.search(r"pr(\d+)$", url)
-    return match.group(1) if match else None
-
-def extract_agent_info(soup):
-    """ Extract the information of the agent"""
+def get_agent_info(soup: BeautifulSoup) -> Dict[str, str]:
     agent_info = {}
 
+    # Locate the main contact container
     contact_box = soup.find("div", class_="re__ldp-contact-box")
-    if contact_box:
-        agent_infor = contact_box.find("div", class_="re__agent-infor re__agent-name")
-        if agent_infor:
-            name_tag = (
-                    agent_infor.find("a", class_="re__contact-name")
-                    or agent_infor.find("a", class_="js__agent-contact-name")
-            )
-            if name_tag:
-                agent_info['agent_name'] = name_tag.get_text(strip=True)
-                agent_info['agent_profile_url'] = name_tag.get('href')
+    if not contact_box:
+        return agent_info
 
+    # Extract agent name and profile link
+    agent_infor = contact_box.find("div", class_="re__agent-infor re__agent-name")
+    if agent_infor:
+        name_tag = (
+                agent_infor.find("a", class_="re__contact-name") or
+                agent_infor.find("a", class_="js__agent-contact-name")
+        )
+        if name_tag:
+            agent_info['name'] = name_tag.get_text(strip=True)
+            href = name_tag.get('href')
+            if href:
+                agent_info['profile_url'] = href
+
+    # Extract agent avatar image URL
     avatar_tag = soup.select_one("img.re__contact-avatar")
     if avatar_tag:
-        agent_info['agent_avatar_url'] = avatar_tag.get('src')
+        src = avatar_tag.get('src')
+        if src:
+            agent_info['avatar_url'] = src
 
+    # Extract visible phone number
     phone_div = soup.select_one("div.js__phone")
     if phone_div:
         phone_span = phone_div.find('span')
-        raw_phone = phone_span.get_text(strip=True) if phone_span else ""
-        agent_info['agent_phone_visible'] = raw_phone
+        if phone_span:
+            agent_info['phone_visible'] = phone_span.get_text(strip=True)
 
+    # Extract Zalo messaging contact information
     zalo_tag = soup.select_one("a.js__zalo-chat")
     if zalo_tag:
-        agent_info['agent_zalo_url'] = zalo_tag.get('data-href')
-        agent_info['agent_zalo_raw'] = zalo_tag.get('raw')
+        data_href = zalo_tag.get('data-href')
+        if data_href:
+            agent_info['zalo_url'] = data_href
+        raw = zalo_tag.get('raw')
+        if raw:
+            agent_info['zalo_raw'] = raw
 
+    # Extract link to view other listings by this agent
     other_listings_tag = soup.select_one("a.re__link-se")
     if other_listings_tag:
         agent_info['other_listings'] = other_listings_tag.get_text(strip=True)
 
     return agent_info
 
-def parse_detail_page(html_content, url):
-    """
-    Extract all structured and unstructured data  from the detailed listing HTML
-    :param html_content: The HTML text string of the detail page.
-    :param url: The URL of the page being parsed.
-    :return: A dictionary containing all the extracted information.
-    """
-    soup = BeautifulSoup(html_content, "lxml")
 
-    # Extract text or attribute value using a CSS selector
-    def get_info(selector, attr=None, default=None):
-        tag = soup.select_one(selector)
-        if tag:
-            return tag.get(attr, default) if attr else tag.get_text(strip=True)
-        return default
-
-    # COORDINATE
-    js_config_data = extract_coords_from_js_config(html_content)
-    latitude = js_config_data.get('latitude')
-    longitude = js_config_data.get('longitude')
-
-    # HTML PARSING
-    type_property = classify_property(url)
-    post_id = extract_post_id(url)
-    agent_data = extract_agent_info(soup)
-    title = get_info("h1")
-    address = get_info("span.re__pr-short-description")
-    price_per_spm = get_info("span.ext")
-
-    # PROPERTY CHARACTERISTICS
+def get_specs(soup: BeautifulSoup) -> Dict[str, str]:
     specs = {}
+
     for item in soup.select(".re__pr-specs-content-item"):
         label_tag = item.select_one(".re__pr-specs-content-item-title")
         value_tag = item.select_one(".re__pr-specs-content-item-value")
+
         if label_tag and value_tag:
-            key = normalize_data_key(label_tag.get_text(strip=True))
+            key = normalize_key(label_tag.get_text(strip=True))
             value = value_tag.get_text(strip=True)
             specs[key] = value
 
-    # SUB-INFO
+    return specs
+
+
+def get_sub_info(soup: BeautifulSoup) -> Dict[str, str]:
     sub_info = {}
+
     for item in soup.select("div.re__pr-short-info-item"):
         title_tag = item.select_one("span.title")
         value_tag = item.select_one("span.value")
+
         if title_tag and value_tag:
-            key = normalize_data_key(title_tag.get_text(strip=True))
+            key = normalize_key(title_tag.get_text(strip=True))
             value = value_tag.get_text(strip=True)
             sub_info[key] = value
 
-    # DESCRIPTION
+    return sub_info
+
+
+def get_description(soup: BeautifulSoup) -> Optional[str]:
     description_tag = soup.select_one(".re__pr-description")
-    description = None
-    if description_tag:
-        description = description_tag.get_text(strip=True)
-        prefix = "Thông tin mô tả"
-        if description.startswith(prefix):
-            description = description.replace(prefix, "", 1).strip()
+    if not description_tag:
+        return None
 
-    # IMAGES
-    images = [
-        (item.find("img").get("data-src") or item.find("img").get("src"))
-        for item in soup.select("div.re__media-thumb-item.js__media-thumbs-item")
-        if item.find("img")  # Ensure img tag exists
-    ]
+    description = description_tag.get_text(strip=True)
 
-    # DATA STRUCTURE
-    data = {
-        "post_id": post_id,
-        "property_url": url,
-        "type_property": type_property,
-        "title": title,
-        "address": address,
-        "latitude": latitude,
-        "longitude": longitude,
-        "price": specs.get("khoang_gia"),
-        "price_per_spm": price_per_spm,
-        "area": specs.get("dien_tich"),
-        "spec": {
-            "bedroom": specs.get("so_phong_ngu"),
-            "bathroom": specs.get("so_phong_tam,_ve_sinh"),
-            "num_floor": specs.get("so_tang"),
-            "orientation": specs.get("huong_nha"),
-            "balcony_direction": specs.get("huong_ban_cong"),
-            "front_width": specs.get("mat_tien"),
-            "road_width": specs.get("duong_vao"),
-            "legal": specs.get("phap_ly"),
-            "furniture": specs.get("noi_that")
-        },
-        "description": description,
-        "images": images if images else None,
-        "date_posted": sub_info.get("ngay_dang"),
-        "date_expired": sub_info.get("ngay_het_han"),
-        "news_type": sub_info.get("loai_tin"),
-        "contact_info": {
-            "name": agent_data.get('agent_name'),
-            "profile_url": agent_data.get('agent_profile_url'),
-            "avatar_url": agent_data.get('agent_avatar_url'),
-            "phone_raw": agent_data.get('normalized_phone'),
-            "phone_visible": agent_data.get('agent_phone_visible'),
-            "zalo_url": agent_data.get('agent_zalo_url'),
-        },
-        "scraped_at": datetime.now().isoformat()
-    }
+    if description.startswith(PREFIX):
+        description = description[len(PREFIX):].strip()
 
-    # Remove keys with None values
-    data = {k: v for k, v in data.items() if v is not None}
-    if 'spec' in data:
-        data['spec'] = {k: v for k, v in data['spec'].items() if v is not None}
-        if not data['spec']: del data['spec']
-    if 'contact_info' in data:
-        data['contact_info'] = {k: v for k, v in data['contact_info'].items() if v is not None}
-        if not data['contact_info']: del data['contact_info']
+    return description if description else None
 
-    return data
 
-if __name__ == "__main__":
-    post_id = extract_post_id("https://batdongsan.com.vn/ban-dat-duong-vo-van-thu-xa-hung-long-5/sieu-vip-binh-chanh-2-5tr-m2-pr44810318")
-    print(post_id)
+def get_images(soup: BeautifulSoup) -> List[str]:
+    images = []
+
+    for item in soup.select("div.re__media-thumb-item.js__media-thumbs-item"):
+        img_tag = item.find("img")
+        if img_tag:
+            # Prefer data-src for lazy-loaded images
+            img_url = img_tag.get("data-src") or img_tag.get("src")
+            if img_url:
+                images.append(img_url)
+
+    return images
+
+
+def parse_detail_page(html_content: str, url: str) -> Dict[str, Any]:
+    """
+    Parse a property listing page into structured data
+    Args:
+        html_content: Raw HTML content of the listing page
+        url: URL of the listing page being parsed
+    Returns:
+        Dictionary containing structured property data
+    """
+    post_id = get_post_id(url) or "UnknownID"
+    try:
+        soup = BeautifulSoup(html_content, "lxml")
+    except Exception as e:
+        logger.critical(f"[{post_id}] Failed to initialize BeautifulSoup: {e}", exc_info=True)
+        return {}
+
+    try:
+        title = get_text(soup, "h1")
+        address = get_text(soup, "span.re__pr-short-description")
+        price_per_spm = get_text(soup, "span.ext")
+        description = get_description(soup)
+        images = get_images(soup)
+    except Exception as e:
+        logger.warning(f"[{post_id}] Error in basic info extraction: {e}")
+        title, address, price_per_spm, description, images = None, None, None, None, []
+
+    coords = {}
+    try:
+        coords = get_coordinate(html_content)
+    except Exception as e:
+        logger.debug(f"[{post_id}] Could not extract coordinates: {e}")
+
+    specs = {}
+    spec_data = {}
+    sub_info = {}
+    try:
+        specs = get_specs(soup)
+        sub_info = get_sub_info(soup)
+
+        for key, value in specs.items():
+            mapped_key = SPEC_KEY_MAPPING.get(key, key)
+            if mapped_key not in ['price', 'area']:
+                spec_data[mapped_key] = value
+    except Exception as e:
+        logger.error(f"[{post_id}] Failed to parse specs table: {e}")
+
+    agent_info = {}
+    try:
+        agent_info = get_agent_info(soup)
+    except Exception as e:
+        logger.warning(f"[{post_id}] Agent info extraction failed: {e}")
+
+    # Construct final data structure
+    try:
+        data = {
+            "post_id": post_id if post_id != "UnknownID" else None,
+            "property_url": url,
+            "transaction_type": set_transaction_type(url),
+            "property_category": set_property_category(url),
+            "title": title,
+            "address": address,
+            "latitude": coords.get('latitude'),
+            "longitude": coords.get('longitude'),
+            "price": specs.get("khoang_gia"),
+            "price_per_spm": price_per_spm,
+            "area": specs.get("dien_tich"),
+            "spec": spec_data,
+            "description": description,
+            "images": images,
+            "date_posted": sub_info.get("ngay_dang"),
+            "date_expired": sub_info.get("ngay_het_han"),
+            "news_type": sub_info.get("loai_tin"),
+            "contact_info": agent_info,
+            "scraped_at": datetime.now().isoformat()
+        }
+
+        return clean_dict(data)
+    except Exception as e:
+        logger.error(f"[{post_id}] Unexpected error during data assembly: {e}", exc_info=True)
+        return {"post_id": post_id, "property_url": url, "error": str(e)}
