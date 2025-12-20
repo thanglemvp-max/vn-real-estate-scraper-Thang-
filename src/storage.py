@@ -1,17 +1,19 @@
 import json
 import os
 from datetime import datetime
-from utils.logging import get_logger
+from utils.logger import get_logger
 
 logger = get_logger("data")
 
 def save_data(properties_data):
-    """ Appends data to a JSON file named based on the current date. """
+    """
+    Appends data to a JSON file named based on the current date.
+    """
     if not properties_data:
         return
 
     date_str = datetime.now().strftime("%Y%m%d")
-    filename = f"data/sale_{date_str}.json"
+    filename = f"data/raw/bds_{date_str}.json"
 
     existing_data = []
 

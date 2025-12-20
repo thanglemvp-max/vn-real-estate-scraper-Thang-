@@ -5,9 +5,9 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
-from parser import parse_detail_page, extract_post_id
-from duplicate_filter import is_duplicate, mark_as_scraped
-from utils.logging import get_logger
+from parser import parse_detail_page, get_post_id
+from utils.helper import is_duplicate, mark_as_scraped
+from utils.logger import get_logger
 
 logger = get_logger("crawler")
 
@@ -63,7 +63,7 @@ def fetch_list_links(driver, page_url):
             try:
                 link_tag = item.find_element(By.TAG_NAME, "a")
                 url = link_tag.get_attribute("href")
-                pid = extract_post_id(url)
+                pid = get_post_id(url)
 
                 if pid:
                     if not is_duplicate(pid):
