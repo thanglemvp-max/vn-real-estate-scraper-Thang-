@@ -71,7 +71,7 @@ def normalize_key(key):
     return key.strip('_')
 
 
-def clean_dict(data):
+def remove_empty_fields(data):
     cleaned = {}
     for key, value in data.items():
         if value is None:
@@ -79,7 +79,7 @@ def clean_dict(data):
         if isinstance(value, str) and not value.strip():
             continue
         if isinstance(value, dict):
-            cleaned_nested = clean_dict(value)
+            cleaned_nested = remove_empty_fields(value)
             if cleaned_nested:
                 cleaned[key] = cleaned_nested
             continue
@@ -304,4 +304,5 @@ def parse_detail_page(html_content, url):
         "verified": is_verified,
         "scraped_at": datetime.now().isoformat()
     }
-    return clean_dict(data)
+    final_data = remove_empty_fields(data)
+    return final_data

@@ -6,21 +6,19 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
 from parser import parse_detail_page, get_post_id
-from utils.helper import is_duplicate, mark_as_scraped
-from utils.logger import get_logger
+from utils import is_success, update_status, get_logger
 
-logger = get_logger("crawler")
+logger = get_logger("scraper")
 
-# Override destructor cho uc.Chrome
-def safe_uc_del(self):
+def safe_quit_driver(self):
     try:
         self.quit()
     except:
         pass
-uc.Chrome.__del__ = safe_uc_del
+uc.Chrome.__del__ = safe_quit_driver
 
-def get_browser(headless=True):
-    """ Initializes an anti-bot browser driver. """
+
+def init_browser(headless=True):
     logger.info("Initializing driver...")
     options = uc.ChromeOptions()
     if headless:
@@ -30,7 +28,6 @@ def get_browser(headless=True):
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-extensions")
-
     user_agent = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -46,11 +43,12 @@ def get_browser(headless=True):
         logger.error(f"Failed to initialize Driver: {e}")
         raise
 
+
 def fetch_list_links(driver, page_url):
-    """ Scrapes listing URLs and filters duplicates immediately. """
     logger.info(f"Scanning: {page_url}")
     links = []
     skipped_on_page = 0
+
     try:
         driver.get(page_url)
         wait = WebDriverWait(driver, 15)
@@ -66,7 +64,7 @@ def fetch_list_links(driver, page_url):
                 pid = get_post_id(url)
 
                 if pid:
-                    if not is_duplicate(pid):
+                    if not is_success(pid):
                         links.append((url, pid))
                     else:
                         skipped_on_page += 1
@@ -79,8 +77,8 @@ def fetch_list_links(driver, page_url):
 
     return links, skipped_on_page
 
-def parse(driver, links):
-    """ Navigates to each detailed URL, parses content. """
+
+def process_single_page(driver, links):
     page_data = []
     total = len(links)
 
@@ -97,7 +95,7 @@ def parse(driver, links):
 
             if data:
                 page_data.append(data)
-                mark_as_scraped(pid)
+                update_status(pid, url, "success")
                 logger.info(f"-> Success data extracted")
 
             time.sleep(random.uniform(2, 4))
@@ -105,3 +103,38 @@ def parse(driver, links):
             logger.warning(f"-> Skip {pid} due to error: {e}")
 
     return page_data
+
+
+def process_multiple_pages(driver, target, save_data_fn):
+    name = target.get("name")
+    base_url = target.get("url")
+    start_page = target.get("start_page", 1)
+    end_page = target.get("end_page", 2)
+
+    total_new = 0
+    total_skipped = 0
+    pages_processed = 0
+
+    logger.info(f"=== PROCESSING TARGET: {name.upper()} ===")
+
+    for p in range(start_page, end_page + 1):
+        page_url = base_url if p == 1 else f"{base_url}/p{p}"
+        logger.info(f"=== ACCESSING PAGE {p} ===")
+
+        links, skipped = fetch_list_links(driver, page_url)
+        total_skipped += skipped
+
+        if not links:
+            pages_processed += 1
+            continue
+
+        results = process_single_page(driver, links)
+
+        if results:
+            save_data_fn(results)
+            total_new += len(results)
+
+        pages_processed += 1
+        time.sleep(random.uniform(3, 6))
+
+    return total_new, total_skipped, pages_processed
