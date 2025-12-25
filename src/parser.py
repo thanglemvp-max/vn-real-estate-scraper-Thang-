@@ -279,7 +279,7 @@ def parse_detail_page(html_content, url):
         if mapped_key not in ['price', 'area']:
             spec_data[mapped_key] = value
     verified_tag = soup.find("div", class_="re__pr-stick-listing-verified")
-    is_verified = verified_tag is not None
+    verified = "verified" if verified_tag else "unverified"
 
     data = {
         "post_id": post_id,
@@ -301,7 +301,7 @@ def parse_detail_page(html_content, url):
         "date_expired": sub_info.get("ngay_het_han"),
         "news_type": sub_info.get("loai_tin"),
         "contact_info": agent_info,
-        "verified": is_verified,
+        "verified_status": verified,
         "scraped_at": datetime.now().isoformat()
     }
     final_data = remove_empty_fields(data)
