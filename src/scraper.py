@@ -5,8 +5,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
-from parser import parse_detail_page, get_post_id, classify_transaction_type
-from utils import get_logger, save_data
+from src.parser import parse_detail_page, get_post_id, classify_transaction_type
+from src.utils import get_logger, save_data
 
 logger = get_logger("scraper")
 

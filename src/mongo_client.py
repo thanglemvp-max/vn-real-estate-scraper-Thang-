@@ -1,7 +1,8 @@
 import os
 from pymongo import MongoClient, errors
 from dotenv import load_dotenv
-from utils import get_logger
+from src.utils.logger import get_logger
+from typing import List, Optional, Dict, Any
 
 load_dotenv()
 logger = get_logger("mongodb")
@@ -30,6 +31,7 @@ class MongoDBClient:
         except Exception as e:
             logger.error(f"MongoDB connection failed: {e}")
             raise
+
 
     def check_duplicated(self, post_id, transaction_type):
         try:
@@ -89,6 +91,7 @@ class MongoDBClient:
             logger.error(f"Bulk insert error: {e}")
             return 0
 
+
     def update_post(self, query, update_data):
         try:
             result = self.col.update_one(query, {"$set": update_data})
@@ -125,6 +128,32 @@ class MongoDBClient:
         except Exception as e:
             logger.error(f"Delete many error: {e}")
             return 0
+
+
+    def fetch_posts(
+            self,
+            query: Optional[Dict[str, Any]] = None,
+            fields: Optional[List[str]] = None,
+            limit: int = 0
+            ) -> List[Dict[str, Any]]:
+        try:
+            if query is None:
+                query = {}
+
+            if fields is None:
+                projection = {"_id": 0}
+            else:
+                projection = {field: 1 for field in fields}
+                projection["_id"] = 0
+
+            cursor = self.col.find(query, projection)
+            if limit > 0:
+                cursor = cursor.limit(limit)
+            return list(cursor)
+
+        except Exception as e:
+            logger.error(f"Fetch posts error: {e}")
+            return []
 
 
     def close(self):
