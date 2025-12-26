@@ -6,7 +6,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
 from src.parser import parse_detail_page, get_post_id, classify_transaction_type
-from src.utils import get_logger, save_data
+from src.utils import get_logger, save_json
 
 logger = get_logger("scraper")
 
@@ -57,7 +57,6 @@ def fetch_list_links(driver, page_url, mongo_client):
         wait.until(EC.presence_of_element_located((By.CLASS_NAME, "js__card")))
         items = driver.find_elements(By.CLASS_NAME, "js__card")
         type_post = classify_transaction_type(page_url)
-        count = len(items)
 
         for item in items:
             try:
@@ -94,7 +93,7 @@ def process_single_page(driver, links, mongo_client):
             html_content = driver.page_source
             data = parse_detail_page(html_content, url)
             if data is not None:
-                save_data([data])
+                save_json([data])
                 mongo_client.insert_post(data)
                 count += 1
 

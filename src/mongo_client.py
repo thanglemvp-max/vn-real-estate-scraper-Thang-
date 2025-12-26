@@ -1,7 +1,7 @@
 import os
 from pymongo import MongoClient, errors
 from dotenv import load_dotenv
-from src.utils.logger import get_logger
+from src.utils import get_logger
 from typing import List, Optional, Dict, Any
 
 load_dotenv()
